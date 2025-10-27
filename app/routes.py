@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from flask import Blueprint, request, jsonify
 from flask import Response
+import json
+import re
 
 from .gpt_service import GPTService
 from .scraper import parse_workbook_html, parse_problem_detail_html
@@ -177,11 +179,11 @@ def get_problem():
         return jsonify({"error": "problem_id is required"}), 400
 
     system = (
-        "너는 코딩테스트 출제/채점 보조 AI야. 저작권/정책을 준수해야 해.\n"
-        "요청된 문제의 원문을 복제하지 말고, 제목/핵심 내용/입력 형식/출력 형식/제약/예제 입출력을 \n"
+        "너는 코딩테스트 출제 AI야.\n"
+        "요청된 문제의 제목/핵심 내용/입력 형식/출력 형식/제약/예제 입출력을 \n"
         "정확하고 충분히 상세하게 요약해서 제공해."
     )
-    user = f"백준 {problem_id}번 문제를 원문 복제 없이, 필요한 모든 정보를 포함해 자세히 요약해줘."
+    user = f"백준 {problem_id}번 문제를, 필요한 모든 정보를 포함해 자세히 요약해줘."
 
     try:
         gpt = GPTService()
@@ -199,22 +201,47 @@ def get_problem():
 def submit_code():
     data = request.get_json(silent=True) or {}
     problem_id = data.get("problem_id")
-    problem_text = data.get("problem_text")  # optional: 요약/원문
-    language = data.get("language", "python")
+    problem_text = data.get("problem_text")
     code = data.get("code")
-    if not problem_id or not code:
-        return jsonify({"error": "problem_id and code are required"}), 400
+    if not code:
+        return jsonify({"error": "code is required"}), 400
+    has_problem_text = isinstance(problem_text, str) and problem_text.strip() != ""
+    has_problem_id = problem_id is not None and str(problem_id).strip() != ""
+    if not (has_problem_text or has_problem_id):
+        return jsonify({"error": "problem_context_required", "detail": "Provide 'problem_text' or 'problem_id'."}), 400
 
     system = (
-        "너는 코딩테스트 자동 채점기야. 출력은 반드시 '정답' 혹은 '오답'으로 시작하고, "
-        "오답이면 틀린 이유를 간결히 설명해."
+        "너는 코딩문제 정답 판정기야. 출력은 반드시 '정답' 혹은 '오답'으로 시작하고, "
+        "오답이면 틀린 이유를 간결히 설명해. 절대 정답 코드는 작성하지마.\n"
+        "오답일때만 틀린 이유를 설명하고, 정답이면 반드시 정답만 출력해.\n"
+        "논리적으로 맞으면 정답으로 판정해.\n"
+        "논리적으로 틀리면 오답으로 판정해.\n"
+        "실제 작동 결과가 맞으면 정답으로 판정해.\n"
+        "문제 조건을 벗어나거나 입출력 결과가 틀리면 오답으로 판정해.\n"
+        "코드 한줄 한줄 다 검사해서 판정해.\n"
+        "실제로 코드가 수행하는 동작을 논리적으로 시뮬레이션해서 판단해.\n"
+        "실제 입력에 대해 코드가 생성할 결과를 단계별로 추론한 뒤에 판정해.\n"
+        "오답판정에서 문제조건,입출력 제외 다 무시해.\n"
+        "range(i + K, N + 1)은 문제 조건에 맞는 탐색 범위이므로 평가에서 제외해\n"
     )
-    user = (
-        f"다음은 백준 {problem_id}번 문제에 대한 사용자 코드입니다.\n"
-        "문제 조건과 입출력 형식에 맞게 정답 여부를 판별해 주세요.\n"
-        "맞으면 \"정답\", 틀리면 \"오답\"이라고 하고, 오답이면 어떤 부분이 잘못되었는지 설명해 주세요.\n\n"
-        f"[문제]\n{problem_text or '(생략됨)'}\n\n[사용자 코드]\n{code}\n"
-    )
+    ctx_parts = []
+    if has_problem_id:
+        ctx_parts.append(f"문제번호(백준): {problem_id}")
+    if has_problem_text:
+        ctx_parts.append(f"문제설명:\n{problem_text}")
+
+    if ctx_parts:
+        user = (
+            "다음은 백준 문제와 사용자 코드입니다. 정답 여부를 판별해 주세요.\n"
+            f"[문제]\n{chr(10).join(ctx_parts)}\n\n"
+            f"[사용자 코드]\n{code}\n"
+        )
+    else:
+        user = (
+            f"다음은 백준 {problem_id}번 문제에 대한 사용자 코드입니다.\n"
+            "문제의 정답 여부를 판별해 주세요.\n"
+            f"[사용자 코드]\n{code}\n"
+        )
 
     try:
         gpt = GPTService()
@@ -232,18 +259,17 @@ def submit_code():
 @api_bp.route("/custom_submit", methods=["POST"])
 def custom_submit():
     data = request.get_json(silent=True) or {}
-    problem_text = data.get("problem_text")  # 생성형 문제 전체 텍스트/요약
-    language = data.get("language", "python")
+    problem_text = data.get("problem_text")
     code = data.get("code")
     if not problem_text or not code:
         return jsonify({"error": "problem_text and code are required"}), 400
 
     system = (
         "너는 코딩테스트 자동 채점기야. 출력은 반드시 '정답' 혹은 '오답'으로 시작하고, "
-        "오답이면 틀린 이유를 간결히 설명해."
+        "오답이면 틀린 이유를 간결히 설명해. 절대 정답 코드는 작성하지마."
     )
     user = (
-        "다음은 생성된 연습문제와 사용자 코드입니다. 문제 조건과 입출력 형식에 맞게 정답 여부를 판별해 주세요.\n"
+        "다음은 생성된 연습문제와 사용자 코드입니다. 문제의 정답 여부를 판별해 주세요.\n"
         "맞으면 \"정답\", 틀리면 \"오답\"이라고 하고, 오답이면 어떤 부분이 잘못되었는지 설명해 주세요.\n\n"
         f"[문제]\n{problem_text}\n\n[사용자 코드]\n{code}\n"
     )
@@ -269,7 +295,7 @@ def feedback():
         return jsonify({"error": "problem_id and code are required"}), 400
 
     system = (
-        "너는 코드 리뷰어야. 오답 코드의 문제점을 명확히 지적하고 개선 포인트를 제시해."
+        "너는 코드 리뷰어야. 오답 코드의 문제점을 명확히 지적하고 개선 포인트를 제시해. 절대 정답 코드는 작성하지마."
     )
     user = (
         f"백준 {problem_id}번 문제 기준으로, 아래 오답 코드의 문제점과 개선점을 설명해줘.\n"
@@ -297,7 +323,7 @@ def custom_feedback():
 
     system = (
         "너는 코드 리뷰어야. 문제의 요구사항을 기준으로 오답 코드의 문제점을 명확히 지적하고, "
-        "개선 포인트와 수정 방향을 제시해. 필요하면 간단한 예시 코드도 포함해."
+        "개선 포인트와 수정 방향을 제시해. 절대 정답 코드는 작성하지마."
     )
     user = (
         "다음은 생성된 연습문제와 사용자의 오답 코드입니다.\n"
@@ -319,16 +345,13 @@ def custom_feedback():
 @api_bp.route("/new_problem", methods=["POST"])
 def new_problem():
     data = request.get_json(silent=True) or {}
-    topic = data.get("topic")  # 예: 정렬, 그리디, DP
-    difficulty = data.get("difficulty", "중")  # 상/중/하
-    last_feedback = data.get("feedback")  # /feedback 응답 텍스트
-    last_detail = data.get("detail")  # /submit 응답 detail 텍스트
-    learning_goal = data.get("learning_goal")  # 선택: 학습자가 지정
+    last_feedback = data.get("feedback")
+    last_detail = data.get("detail")
 
-    if not topic and not (last_feedback or last_detail):
+    if not (last_feedback or last_detail):
         return jsonify({
-            "error": "topic_or_feedback_required",
-            "detail": "topic 또는 feedback/detail 중 하나는 필요합니다."
+            "error": "feedback_required",
+            "detail": "feedback/detail 중 하나는 필요합니다."
         }), 400
 
     system = (
@@ -341,12 +364,6 @@ def new_problem():
     )
 
     context_parts = []
-    if topic:
-        context_parts.append(f"유형: {topic}")
-    if difficulty:
-        context_parts.append(f"난이도: {difficulty}")
-    if learning_goal:
-        context_parts.append(f"학습 목표: {learning_goal}")
     if last_feedback:
         context_parts.append(f"오답 피드백:\n{last_feedback}")
     if last_detail and not last_feedback:
@@ -354,7 +371,7 @@ def new_problem():
 
     context = "\n\n".join(context_parts) if context_parts else "(맥락 없음)"
     user = (
-        "아래 맥락(오답 원인/학습 목표)을 반영해 비슷한 난이도의 새로운 연습문제를 만들어줘.\n"
+        "아래 맥락(오답 원인)을 반영해 비슷한 난이도의 새로운 연습문제를 만들어줘.\n"
         "반드시 위 요구사항을 모두 만족해줘.\n\n"
         f"[맥락]\n{context}"
     )
@@ -367,9 +384,7 @@ def new_problem():
         ])
         return jsonify({
             "problem": content,
-            "topic": topic,
-            "difficulty": difficulty,
-            "tailored": bool(last_feedback or last_detail or learning_goal),
+            "tailored": bool(last_feedback or last_detail),
         })
     except Exception as e:
         return jsonify({"error": "gpt_request_failed", "detail": str(e)}), 502
@@ -388,18 +403,18 @@ def assist():
         return jsonify({"error": "question is required"}), 400
 
     system = (
-        "너는 코딩 도우미야. 사용자의 질문과 코드/문제 맥락을 바탕으로 정확하고 실용적인 도움을 제공해.\n"
+        "너는 코딩 도우미야. 사용자의 질문과 물어본 코드를 바탕으로 정확하고 실용적인 도움을 제공해.\n"
         "요구사항:\n"
-        "- 핵심 원인 설명 → 수정 방향 → 간단 예시 코드 순으로 제시\n"
+        "- 질문에 대한 핵심 설명 → 수정 방향 → 간단 예시 코드 순으로 제시\n"
         "- 과도한 장황함은 피하고, 필요한 경우만 코드 제시\n"
-        "- 보안/정책을 준수하고, 실행 결과를 단정하지 말고 추론 근거를 제시\n"
-        "- code가 제공되면 이를 최우선으로 분석하고, full_code는 보조 맥락으로만 참고"
+        "- 실행 결과를 단정하지 말고 추론 근거를 제시\n"
+        "- 반드시 물어본 코드만 분석하고, 전체코드는 참고만\n"
     )
 
     ctx_parts = []
     # 'code'를 최우선 맥락으로 배치하고, 'full_code'는 참고로 표기
     if code:
-        ctx_parts.append(f"코드(중심 분석 대상):\n{code}")
+        ctx_parts.append(f"물어본 코드(중심 분석 대상):\n{code}")
     if problem_id:
         ctx_parts.append(f"문제번호(백준): {problem_id}")
     if problem_text:
@@ -409,7 +424,7 @@ def assist():
 
     context = "\n\n".join(ctx_parts) if ctx_parts else "(제공된 맥락 없음)"
     user = (
-        "다음 질문에 답해줘. 가능하면 핵심/수정방향/예시 순으로 짧고 명확하게.\n\n"
+        "다음 질문과 물어본 코드에 답해줘. 가능하면 짧고 명확하게.\n\n"
         f"[맥락]\n{context}\n\n[질문]\n{question}"
     )
 
@@ -525,6 +540,213 @@ def code_only():
         return jsonify({"error": "gpt_request_failed", "detail": str(e)}), 502
 
 
+@api_bp.route("/annotate_code", methods=["POST"])
+def annotate_code():
+    data = request.get_json(silent=True) or {}
+    code = data.get("code")
+    language = (data.get("language") or "python").lower()
+    if not isinstance(code, str) or code.strip() == "":
+        return jsonify({"error": "code is required"}), 400
+
+    def _strip_code_fences(text: str) -> str:
+        s = (text or "").lstrip("\ufeff").strip()
+        if s.startswith("```"):
+            lines = s.splitlines()
+            i_start = 1
+            i_end = len(lines)
+            for i in range(len(lines) - 1, -1, -1):
+                if lines[i].strip().startswith("```"):
+                    i_end = i
+                    break
+            core = "\n".join(lines[i_start:i_end]).strip()
+            return core
+        if "```" in s:
+            first = s.find("```")
+            second = s.find("```", first + 3)
+            third = s.find("```", second + 3) if second != -1 else -1
+            if second != -1 and third != -1:
+                inner = s[second + 3:third]
+                return inner.strip()
+        return s
+
+    def _comment_prefix(lang: str) -> str:
+        mapping = {
+            "python": "#",
+            "py": "#",
+            "ruby": "#",
+            "rb": "#",
+            "bash": "#",
+            "sh": "#",
+            "javascript": "//",
+            "js": "//",
+            "typescript": "//",
+            "ts": "//",
+            "java": "//",
+            "c": "//",
+            "cpp": "//",
+            "c++": "//",
+            "go": "//",
+            "golang": "//",
+            "rust": "//",
+            "swift": "//",
+            "kotlin": "//",
+            "php": "//",
+        }
+        if lang in mapping:
+            return mapping[lang]
+        l = lang.lower()
+        if "python" in l:
+            return "#"
+        return "//"
+
+    # Ask GPT for structured per-line inline changes (JSON only), focused on high-impact items
+    system = (
+        "너는 코드 리뷰어이자 리팩터링 가이드야. 사용자가 보낸 코드를 기반으로, "
+        "정말 중요한 지점에만 같은 라인 끝 주석과 (필요 시) 라인 단위 대체 코드를 제안해.\n"
+        "중요: 여러 줄 병합/분할 금지, 함수/블록 이동 금지, 해당 '한 라인'만 다뤄.\n"
+        "오직 JSON만 출력해. 마크다운/설명 금지. 스키마:\n"
+        "{\n  \"changes\": [\n    {\n      \"line\": <1-based int>,\n      \"new_code\": \"(선택) 해당 라인을 대체할 코드 - 들여쓰기 없음, 개행 없음\",\n      \"comment\": \"(선택) 같은 라인 끝에 붙일 한 줄 주석(120자 이하)\",\n      \"severity\": \"critical|high|medium|low\",\n      \"category\": \"bug|correctness|boundary|performance|security|readability|maintainability|style\",\n      \"impact\": <1-10 정수>\n    }\n  ]\n}\n"
+        "선정 기준: correctness/bug/boundary/security/performance/복잡한 로직에만 집중. style/naming/사소한 가독성은 제외.\n"
+        "상위 영향도 8~10만 포함하고, severity는 critical/high만 사용. 제안 개수는 최대 10개.\n"
+        "new_code에는 들여쓰기를 넣지 말고 개행을 포함하지 말아라."
+    )
+    user = (
+        f"언어: {language}\n"
+        "다음 사용자 코드에 대해 같은 라인에 붙일 주석과 필요시 라인 단위 대체 코드를 제안해.\n"
+        "오직 위 스키마 JSON만 출력해.\n\n"
+        f"[코드]\n{code}"
+    )
+
+    try:
+        gpt = GPTService()
+        content = gpt.complete([
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ])
+    except Exception as e:
+        return jsonify({"error": "gpt_request_failed", "detail": str(e)}), 502
+
+    try:
+        payload = json.loads(_strip_code_fences(content))
+        changes = payload.get("changes", []) if isinstance(payload, dict) else []
+        if not isinstance(changes, list):
+            changes = []
+    except Exception as e:
+        return jsonify({"error": "gpt_format_error", "detail": str(e), "raw": content}), 502
+
+    # Build map: line_no -> { new_code?, comment? }
+    lines = code.splitlines(True)  # keepends
+    total = len(lines)
+    prefix = _comment_prefix(language)
+    line_to_change = {}
+
+    def _norm_str(v):
+        return v if isinstance(v, str) and v.strip() != "" else None
+
+    # pre-filter: keep only high-impact (impact>=8) or severity critical/high and non-style
+    filtered = []
+    for item in changes:
+        if not isinstance(item, dict):
+            continue
+        try:
+            line_no = int(item.get("line"))
+        except Exception:
+            continue
+        if line_no < 1 or line_no > total:
+            continue
+        sev = str(item.get("severity", "")).lower()
+        cat = str(item.get("category", "")).lower()
+        try:
+            impact = int(item.get("impact", 0))
+        except Exception:
+            impact = 0
+
+        if cat in {"style", "naming"}:
+            continue
+        if sev not in {"critical", "high"} and impact < 8:
+            continue
+
+        new_code = item.get("new_code")
+        if isinstance(new_code, str) and ("\n" in new_code or "\r" in new_code):
+            new_code = None
+        comment = _norm_str(item.get("comment"))
+        filtered.append({
+            "line": line_no,
+            "new_code": new_code if isinstance(new_code, str) else None,
+            "comment": comment,
+            "impact": impact,
+            "severity": sev,
+            "category": cat,
+        })
+
+    # Cap to top 10 by (severity, impact) while preserving original order preference
+    def _rank_key(it):
+        sev = it.get("severity")
+        impact = int(it.get("impact", 0))
+        sev_score = 2 if sev == "critical" else (1 if sev == "high" else 0)
+        return (-sev_score, -impact)
+
+    # stable sort by rank, but keep original relative ordering for equal rank
+    filtered_sorted = sorted(range(len(filtered)), key=lambda i: _rank_key(filtered[i]))
+    selected_idx = filtered_sorted[:10]
+    # restore original stable order among selected by their original positions
+    selected_idx = sorted(selected_idx)
+
+    applied = 0
+    for i in selected_idx:
+        item = filtered[i]
+        line_no = item["line"]
+        new_code = item.get("new_code")
+        comment = item.get("comment")
+        if new_code is None and comment is None:
+            continue
+        line_to_change[line_no] = {"new_code": new_code, "comment": comment}
+        applied += 1
+
+    # Reconstruct code, preserving original indentation and newline style per line
+    out_parts = []
+    for idx in range(1, total + 1):
+        original = lines[idx - 1]
+        change = line_to_change.get(idx)
+        if not change:
+            out_parts.append(original)
+            continue
+
+        # Determine newline of this line
+        nl = ""
+        if original.endswith("\r\n"):
+            nl = "\r\n"
+            body = original[:-2]
+        elif original.endswith("\n"):
+            nl = "\n"
+            body = original[:-1]
+        else:
+            body = original
+
+        # Preserve leading indentation exactly
+        i = 0
+        while i < len(body) and body[i] in (" ", "\t"):
+            i += 1
+        indent = body[:i]
+        content_body = body[i:]
+
+        new_content = content_body
+        if isinstance(change.get("new_code"), str):
+            new_content = change["new_code"].rstrip("\r\n")
+
+        result_line = indent + new_content
+        if isinstance(change.get("comment"), str) and change["comment"].strip() != "":
+            if new_content:
+                result_line += "  " + prefix + " " + change["comment"].strip()
+            else:
+                result_line += prefix + " " + change["comment"].strip()
+
+        out_parts.append(result_line + nl)
+
+    annotated = "".join(out_parts) if out_parts else code
+    return Response(annotated, mimetype="text/plain; charset=utf-8")
+
+
 @api_bp.route("/compare_with_gpt", methods=["POST"])
 def compare_with_gpt():
     data = request.get_json(silent=True) or {}
@@ -568,7 +790,6 @@ def compare_with_gpt():
     solve_system = (
         "너는 코딩테스트 문제 해결기야. 다음 요구를 따르며 정답 코드를 생성해.\n"
         "- 출력은 오직 코드만: 설명/주석/마크다운 금지.\n"
-        "- 표준입출력을 사용하고, 빠르고 견고하게 작성해.\n"
         f"- 언어: {language}\n"
     )
 
@@ -580,7 +801,6 @@ def compare_with_gpt():
     elif isinstance(problem_id, int):
         solve_user = (
             f"백준 {problem_id}번 문제의 정답 코드를 작성해. 오직 코드만 출력해.\n"
-            "입출력은 표준입출력을 사용하고, 타임아웃을 고려해 효율적으로 작성해."
         )
     else:
         return jsonify({"error": "problem_context_required", "detail": "Provide 'problem_text' for generated problems or 'problem_id' for BOJ problems."}), 400
@@ -640,23 +860,34 @@ def solve():
     problem_id_raw = data.get("problem_id")
     language = data.get("language", "python")
 
-    # 입력 유효성: 둘 중 하나는 필수, 둘 다 동시에 허용(둘 다 있으면 problem_text 우선)
+    # 입력 유효성: 둘 중 하나는 필수, 둘 다 동시에 허용
     has_text = isinstance(problem_text, str) and problem_text.strip() != ""
     has_id = problem_id_raw is not None and str(problem_id_raw).strip() != ""
     if not (has_text or has_id):
         return jsonify({"error": "problem_context_required", "detail": "Provide 'problem_text' for generated problems or 'problem_id' for BOJ problems."}), 400
 
-    # 시스템/유저 프롬프트 구성 (코드만 출력)
+    # 시스템/유저 프롬프트 구성
     solve_system = (
-        "너는 코딩테스트 문제 해결기야. 다음 요구를 따르며 정답 코드를 생성해.\n"
-        "- 출력은 오직 코드만: 설명/주석/마크다운 금지.\n"
-        "- 표준입출력을 사용하고, 빠르고 견고하게 작성해.\n"
+        "너는 코딩문제 정답 생성기야. 다음 요구를 따르며 정답 코드를 생성해.\n"
+        "반드시 코드만 출력해. 설명, 주석, 마크다운 금지.\n"
+        "문제 조건을 100% 만족하고 논리적으로 완전히 맞으며 입출력결과 일치하는 완벽한 정답 코드를 생성해.\n"
+        "언어 규칙을 철저히 따라서 코드를 생성해.\n"
+        "```python``` 같은 블록 없이 코드만 생성해.\n"
         f"- 언어: {language}\n"
     )
 
-    if has_text:
+    if has_text and has_id:
+        try:
+            problem_id = int(problem_id_raw)
+        except Exception:
+            return jsonify({"error": "invalid_problem_id"}), 400
         solve_user = (
-            "다음 문제 설명을 바탕으로 정답 코드를 작성해. 오직 코드만 출력해.\n\n"
+            "다음 문제 조건을 100% 만족하고 논리적으로 완전히 맞으며 입출력결과 일치하는 완벽한 정답 코드를 작성해.\n"
+            f"백준 {problem_id}번 문제\n{problem_text}\n"
+        )
+    elif has_text:
+        solve_user = (
+            "다음 문제 설명을 바탕으로 정답 코드를 작성해.\n\n"
             f"[문제]\n{problem_text}\n"
         )
     else:
@@ -665,30 +896,8 @@ def solve():
         except Exception:
             return jsonify({"error": "invalid_problem_id"}), 400
         solve_user = (
-            f"백준 {problem_id}번 문제의 정답 코드를 작성해. 오직 코드만 출력해.\n"
-            "입출력은 표준입출력을 사용하고, 타임아웃을 고려해 효율적으로 작성해."
+            f"백준 {problem_id}번 문제의 정답 코드를 작성해.\n"
         )
-
-    def _strip_code_fences(text: str) -> str:
-        s = (text or "").lstrip("\ufeff").strip()
-        if s.startswith("```"):
-            lines = s.splitlines()
-            i_start = 1
-            i_end = len(lines)
-            for i in range(len(lines) - 1, -1, -1):
-                if lines[i].strip().startswith("```"):
-                    i_end = i
-                    break
-            core = "\n".join(lines[i_start:i_end]).strip()
-            return core
-        if "```" in s:
-            first = s.find("```")
-            second = s.find("```", first + 3)
-            third = s.find("```", second + 3) if second != -1 else -1
-            if second != -1 and third != -1:
-                inner = s[second + 3:third]
-                return inner.strip()
-        return s
 
     try:
         gpt = GPTService()
@@ -696,8 +905,7 @@ def solve():
             {"role": "system", "content": solve_system},
             {"role": "user", "content": solve_user},
         ])
-        code_only = _strip_code_fences(content)
-        return Response(code_only, mimetype="text/plain; charset=utf-8")
+        return Response(content, mimetype="text/plain; charset=utf-8")
     except Exception as e:
         status = getattr(e, "status_code", None)
         if status is None:
@@ -706,3 +914,109 @@ def solve():
         if isinstance(status, int) and status in {400, 401, 403, 404, 409, 422, 429}:
             return jsonify({"error": "gpt_solve_failed", "detail": str(e)}), status
         return jsonify({"error": "gpt_solve_failed", "detail": str(e)}), 502
+
+
+@api_bp.route("/run_python", methods=["POST"])
+def run_python():
+    data = request.get_json(silent=True) or {}
+    code = data.get("code")
+    if not isinstance(code, str) or code.strip() == "":
+        return jsonify({"error": "code is required"}), 400
+
+    args_raw = data.get("args") or []
+    if not isinstance(args_raw, list):
+        return jsonify({"error": "invalid_args", "detail": "'args' must be a list of strings"}), 400
+    try:
+        args_list = [str(a) for a in args_raw]
+    except Exception:
+        return jsonify({"error": "invalid_args", "detail": "'args' must be convertible to strings"}), 400
+
+    stdin_text = data.get("stdin")
+    if stdin_text is not None and not isinstance(stdin_text, str):
+        return jsonify({"error": "invalid_stdin", "detail": "'stdin' must be a string"}), 400
+
+    # Time and output limits
+    try:
+        timeout_sec = float(data.get("timeout_sec", 5))
+    except Exception:
+        return jsonify({"error": "invalid_timeout", "detail": "'timeout_sec' must be a number"}), 400
+    if timeout_sec <= 0:
+        timeout_sec = 1.0
+    if timeout_sec > 15:
+        timeout_sec = 15.0
+
+    try:
+        limit_bytes = int(data.get("limit_bytes", 32768))
+    except Exception:
+        return jsonify({"error": "invalid_limit", "detail": "'limit_bytes' must be an integer"}), 400
+    if limit_bytes < 1024:
+        limit_bytes = 1024
+    if limit_bytes > 262144:
+        limit_bytes = 262144
+
+    def _truncate(s: str) -> (str, bool):
+        bs = s.encode("utf-8", errors="replace")
+        if len(bs) <= limit_bytes:
+            return s, False
+        trimmed = bs[:limit_bytes]
+        # ensure valid utf-8 after cut
+        text = trimmed.decode("utf-8", errors="ignore")
+        return text, True
+
+    import sys
+    import subprocess
+    import tempfile
+    import time as _time
+    import os as _os
+
+    start = _time.time()
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            src_path = _os.path.join(tmpdir, "main.py")
+            with open(src_path, "w", encoding="utf-8") as f:
+                f.write(code)
+
+            cmd = [sys.executable, "-I", "-S", "-B", src_path]
+            if args_list:
+                cmd.extend(args_list)
+
+            try:
+                completed = subprocess.run(
+                    cmd,
+                    input=stdin_text if isinstance(stdin_text, str) else None,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout_sec,
+                    cwd=tmpdir,
+                )
+            except subprocess.TimeoutExpired as te:
+                # Collect partial output if available
+                stdout_partial = te.stdout or ""
+                stderr_partial = te.stderr or ""
+                out_trunc, out_is_trunc = _truncate(stdout_partial)
+                err_trunc, err_is_trunc = _truncate(stderr_partial)
+                duration_ms = int((_time.time() - start) * 1000)
+                return (
+                    jsonify({
+                        "error": "timeout",
+                        "detail": f"Execution exceeded {timeout_sec} seconds",
+                        "stdout": out_trunc,
+                        "stderr": err_trunc,
+                        "truncated": {"stdout": out_is_trunc, "stderr": err_is_trunc},
+                        "duration_ms": duration_ms,
+                    }),
+                    408,
+                )
+
+            out_trunc, out_is_trunc = _truncate(completed.stdout or "")
+            err_trunc, err_is_trunc = _truncate(completed.stderr or "")
+            duration_ms = int((_time.time() - start) * 1000)
+            return jsonify({
+                "stdout": out_trunc,
+                "stderr": err_trunc,
+                "exit_code": int(completed.returncode),
+                "truncated": {"stdout": out_is_trunc, "stderr": err_is_trunc},
+                "duration_ms": duration_ms,
+            })
+    except Exception as e:
+        return jsonify({"error": "execution_failed", "detail": str(e)}), 500
