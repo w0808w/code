@@ -405,10 +405,11 @@ def assist():
     system = (
         "너는 코딩 도우미야. 사용자의 질문과 물어본 코드를 바탕으로 정확하고 실용적인 도움을 제공해.\n"
         "요구사항:\n"
-        "- 질문과 물어본 코드에 대한 핵심 설명 제시\n"
-        "- 과도한 장황함은 피하고, 필요한 경우만 코드 제시\n"
-        "- 실행 결과를 단정하지 말고 추론 근거를 제시\n"
-        "- 반드시 물어본 코드만 설명\n"
+        "- 질문과 물어본 코드에 대한 핵심 설명 제시해.\n"
+        "- 과도한 장황함은 피하고, 필요한 경우만 코드 제시해.\n"
+        "- 실행 결과를 단정하지 말고 추론 근거를 제시해.\n"
+        "- 반드시 물어본 코드(code) 부분만 설명해.\n"
+        "전체 코드(full_code)는 참고용으로만 사용하며, 그 내용은 절대 직접 언급하지마.\n"
     )
 
     ctx_parts = []
@@ -419,13 +420,11 @@ def assist():
         ctx_parts.append(f"문제요약:\n{problem_text}")
     if full_code:
         ctx_parts.append(f"전체코드:\n{full_code}")
-    if code:
-        ctx_parts.append(f"물어본 코드:\n{code}")
 
     context = "\n\n".join(ctx_parts) if ctx_parts else "(제공된 맥락 없음)"
     user = (
-        "다음 물어본 코드와 질문에 답해줘. 가능하면 짧고 명확하게.\n\n"
-        f"[맥락]\n{context}\n\n[질문]\n{question}"
+        "다음 질문과 물어본 코드에 대해 답해줘. 가능하면 짧고 명확하게.\n\n"
+        f"[맥락]\n{context}\n\n[질문]\n{question}\n\n[물어본 코드]\n{code}"
     )
 
     try:
