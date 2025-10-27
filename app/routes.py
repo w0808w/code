@@ -394,7 +394,7 @@ def new_problem():
 def assist():
     data = request.get_json(silent=True) or {}
     question = data.get("question")
-    code = data.get("code")
+    code = data.get("code") or data.get("selectedText")
     full_code = data.get("full_code")
     problem_id = data.get("problem_id")
     problem_text = data.get("problem_text")
