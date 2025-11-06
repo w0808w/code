@@ -25,3 +25,22 @@ def get_server_port() -> int:
         return 8000
 
 
+
+def get_ai_provider() -> str:
+    return os.getenv("AI_PROVIDER", "openai").lower()
+
+
+def get_gemini_api_key() -> Optional[str]:
+    return os.getenv("GEMINI_API_KEY")
+
+
+def get_gemini_model() -> str:
+    return os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+
+
+def get_anthropic_api_key() -> Optional[str]:
+    return os.getenv("ANTHROPIC_API_KEY")
+
+
+def get_claude_model() -> str:
+    return os.getenv("CLAUDE_MODEL", "claude-haiku-4-5-20251001")

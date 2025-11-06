@@ -7,3 +7,5 @@ PyMySQL>=1.1.1
 requests>=2.32.3
 gunicorn
 gevent>=23.9.1
+google-generativeai>=0.7.2
+anthropic>=0.34.0

@@ -29,6 +29,23 @@ def _init_db():
     _DB_INIT_DONE = True
 
 
+def _extract_provider_and_model(data: dict | None = None) -> tuple[str | None, str | None]:
+    # Read provider/model from JSON, then form, then query; fallback to None (env defaults apply)
+    provider = None
+    model = None
+    try:
+        provider = (data.get("provider") if isinstance(data, dict) else None) or request.form.get("provider") or request.args.get("provider")
+    except Exception:
+        provider = request.form.get("provider") or request.args.get("provider")
+    try:
+        model = (data.get("model") if isinstance(data, dict) else None) or request.form.get("model") or request.args.get("model")
+    except Exception:
+        model = request.form.get("model") or request.args.get("model")
+    provider = (str(provider).strip().lower() if provider is not None and str(provider).strip() != "" else None)
+    model = (str(model).strip() if model is not None and str(model).strip() != "" else None)
+    return provider, model
+
+
 @api_bp.route("/collect/company", methods=["POST"])
 def collect_company():
     data = request.get_json(silent=True) or {}
@@ -186,7 +203,8 @@ def get_problem():
     user = f"백준 {problem_id}번 문제를, 필요한 모든 정보를 포함해 자세히 요약해줘."
 
     try:
-        gpt = GPTService()
+        _prov, _model = _extract_provider_and_model(data)
+        gpt = GPTService(provider=_prov, model=_model)
         content = gpt.complete([
             {"role": "system", "content": system},
             {"role": "user", "content": user},
@@ -223,6 +241,7 @@ def submit_code():
         "실제 입력에 대해 코드가 생성할 결과를 단계별로 검증한 뒤에 판정해.\n"
         "오답판정에서 문제조건,입출력만으로 판정해.\n"
         "range(i + K, N + 1)은 문제 조건에 맞는 탐색 범위이므로 평가에서 제외해\n"
+        "인덱스 계산관련 오류는 무시해.\n"
     )
     ctx_parts = []
     if has_problem_id:
@@ -244,7 +263,8 @@ def submit_code():
         )
 
     try:
-        gpt = GPTService()
+        _prov, _model = _extract_provider_and_model(data)
+        gpt = GPTService(provider=_prov, model=_model)
         content = gpt.complete([
             {"role": "system", "content": system},
             {"role": "user", "content": user},
@@ -275,7 +295,8 @@ def custom_submit():
     )
 
     try:
-        gpt = GPTService()
+        _prov, _model = _extract_provider_and_model(data)
+        gpt = GPTService(provider=_prov, model=_model)
         content = gpt.complete([
             {"role": "system", "content": system},
             {"role": "user", "content": user},
@@ -303,7 +324,8 @@ def feedback():
     )
 
     try:
-        gpt = GPTService()
+        _prov, _model = _extract_provider_and_model(data)
+        gpt = GPTService(provider=_prov, model=_model)
         content = gpt.complete([
             {"role": "system", "content": system},
             {"role": "user", "content": user},
@@ -332,7 +354,8 @@ def custom_feedback():
     )
 
     try:
-        gpt = GPTService()
+        _prov, _model = _extract_provider_and_model(data)
+        gpt = GPTService(provider=_prov, model=_model)
         content = gpt.complete([
             {"role": "system", "content": system},
             {"role": "user", "content": user},
@@ -377,7 +400,8 @@ def new_problem():
     )
 
     try:
-        gpt = GPTService()
+        _prov, _model = _extract_provider_and_model(data)
+        gpt = GPTService(provider=_prov, model=_model)
         content = gpt.complete([
             {"role": "system", "content": system},
             {"role": "user", "content": user},
@@ -428,7 +452,8 @@ def assist():
     )
 
     try:
-        gpt = GPTService()
+        _prov, _model = _extract_provider_and_model(data)
+        gpt = GPTService(provider=_prov, model=_model)
         content = gpt.complete([
             {"role": "system", "content": system},
             {"role": "user", "content": user},
@@ -520,7 +545,8 @@ def code_only():
         return s
 
     try:
-        gpt = GPTService()
+        _prov, _model = _extract_provider_and_model(data)
+        gpt = GPTService(provider=_prov, model=_model)
         content = gpt.complete([
             {"role": "system", "content": system},
             {"role": "user", "content": user},
@@ -617,7 +643,8 @@ def annotate_code():
     )
 
     try:
-        gpt = GPTService()
+        _prov, _model = _extract_provider_and_model(data)
+        gpt = GPTService(provider=_prov, model=_model)
         content = gpt.complete([
             {"role": "system", "content": system},
             {"role": "user", "content": user},
@@ -805,7 +832,8 @@ def compare_with_gpt():
         return jsonify({"error": "problem_context_required", "detail": "Provide 'problem_text' for generated problems or 'problem_id' for BOJ problems."}), 400
 
     try:
-        gpt = GPTService()
+        _prov, _model = _extract_provider_and_model(data)
+        gpt = GPTService(provider=_prov, model=_model)
         gpt_solution_raw = gpt.complete([
             {"role": "system", "content": solve_system},
             {"role": "user", "content": solve_user},
@@ -836,7 +864,8 @@ def compare_with_gpt():
     )
 
     try:
-        gpt = GPTService()
+        _prov, _model = _extract_provider_and_model(data)
+        gpt = GPTService(provider=_prov, model=_model)
         comparison = gpt.complete([
             {"role": "system", "content": review_system},
             {"role": "user", "content": review_user},
@@ -907,7 +936,8 @@ def solve():
         )
 
     try:
-        gpt = GPTService()
+        _prov, _model = _extract_provider_and_model(data)
+        gpt = GPTService(provider=_prov, model=_model)
         content = gpt.complete([
             {"role": "system", "content": solve_system},
             {"role": "user", "content": solve_user},
@@ -983,9 +1013,13 @@ def run_python():
             with open(src_path, "w", encoding="utf-8") as f:
                 f.write(code)
 
-            cmd = [sys.executable, "-I", "-S", "-B", src_path]
+            cmd = [sys.executable, "-u", "-X", "utf8", "-I", "-S", "-B", src_path]
             if args_list:
                 cmd.extend(args_list)
+
+            env = _os.environ.copy()
+            env["PYTHONIOENCODING"] = "utf-8"
+            env["PYTHONUTF8"] = "1"
 
             try:
                 completed = subprocess.run(
@@ -993,8 +1027,11 @@ def run_python():
                     input=stdin_text if isinstance(stdin_text, str) else None,
                     capture_output=True,
                     text=True,
+                    encoding="utf-8",
+                    errors="replace",
                     timeout=timeout_sec,
                     cwd=tmpdir,
+                    env=env,
                 )
             except subprocess.TimeoutExpired as te:
                 # Collect partial output if available
